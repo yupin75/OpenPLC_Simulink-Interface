@@ -318,7 +318,7 @@ void *sendSimulinkData(void *args)
 		{
 			printf("Error sending valve status on socket %d\n", socket_fd);
 		}
-		sleep_ms(1000);
+		sleep_ms(100);
 	}
 }
 
@@ -523,7 +523,7 @@ void *connectToStation(void *args)
 			}
 		}
 
-		sleep_ms(1000);
+		sleep_ms(100);
 	}
 }
 
@@ -532,15 +532,15 @@ void *connectToStation(void *args)
 //-----------------------------------------------------------------------------
 void exchangeDataWithOpenPLC()
 {
-  //creating threads to exchange data with the OpenPLC stations
-  int *stations = new int[5];
-  stations[0] = 1; stations[1] = 2; stations[2] = 3; stations[3] = 4; stations[4] = 5;
-  pthread_t plcThreads[5];
-  pthread_create(&plcThreads[0], NULL, connectToStation, (int *)&stations[0]);
-  //pthread_create(&plcThreads[1], NULL, connectToStation, (int *)&stations[1]);
-  //pthread_create(&plcThreads[2], NULL, connectToStation, (int *)&stations[2]);
-  //pthread_create(&plcThreads[3], NULL, connectToStation, (int *)&stations[3]);
-  //pthread_create(&plcThreads[4], NULL, connectToStation, (int *)&stations[4]);
+	//creating threads to exchange data with the OpenPLC stations
+	int *stations = new int[5];
+	stations[0] = 1; stations[1] = 2; stations[2] = 3; stations[3] = 4; stations[4] = 5;
+	pthread_t plcThreads[5];
+	pthread_create(&plcThreads[0], NULL, connectToStation, (int *)&stations[0]);
+	pthread_create(&plcThreads[1], NULL, connectToStation, (int *)&stations[1]);
+	pthread_create(&plcThreads[2], NULL, connectToStation, (int *)&stations[2]);
+	pthread_create(&plcThreads[3], NULL, connectToStation, (int *)&stations[3]);
+	pthread_create(&plcThreads[4], NULL, connectToStation, (int *)&stations[4]);
 }
 
 //-----------------------------------------------------------------------------
@@ -564,7 +564,7 @@ int main ()
 
 	while(1)
 	{
-	  ///*
+		///*
 		pthread_mutex_lock(&bufferLock);
 		printf("Station 1\nPressure: %d\tPump: %d\t\tValve: %d\n", dataStation1.pressure, dataStation1.pumpState, dataStation1.reliefValve);
 		printf("Station 2\nPressure: %d\tPump: %d\t\tValve: %d\n", dataStation2.pressure, dataStation2.pumpState, dataStation2.reliefValve);
