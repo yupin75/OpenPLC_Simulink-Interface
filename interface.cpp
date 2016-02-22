@@ -13,25 +13,39 @@
 #include <fstream>
 #include <string>
 
+#define TYPE_ANALOGIN		0
+#define TYPE_ANALOGOUT		1
+#define TYPE_DIGITALIN		2
+#define TYPE_DIGITALOUT		3
+
+#define PLC_STATIONS_PORT	6668
+
 using namespace std;
 
-char plcStation1[100], plcStation2[100], plcStation3[100], plcStation4[100], plcStation5[100];
-char simulink[100];
+char simulink_ip[100];
 
 pthread_mutex_t bufferLock;
 
 struct plcData
 {
-	uint16_t pressure = 0;
-	bool pumpState = 0;
-	bool reliefValve = 0;
+	uint16_t analogIn[8];
+	uint16_t analogOut[8];
+	bool digitalIn[16];
+	bool digitalOut[16];
 };
 
-struct plcData dataStation1;
-struct plcData dataStation2;
-struct plcData dataStation3;
-struct plcData dataStation4;
-struct plcData dataStation5;
+struct stationInfo
+{
+	char ip[100];
+	uint16_t analogInPorts[8];
+	uint16_t analogOutPorts[8];
+	uint16_t digitalInPorts[16];
+	uint16_t digitalOutPorts[16];
+};
+
+struct plcData *stations_data;
+struct stationInfo *stations_info;
+uint8_t num_stations = 0;
 
 //-----------------------------------------------------------------------------
 // Helper function - Convert a byte array into a double
@@ -57,100 +71,276 @@ void sleep_ms(int milliseconds)
 }
 
 //-----------------------------------------------------------------------------
-// Finds the IP address on the line provided
+// Finds the data between the separators on the line provided
 //-----------------------------------------------------------------------------
-void getIPAddress(char *line, char *buf)
+void getData(char *line, char *buf, char separator1, char separator2)
 {
 	int i=0, j=0;
 
-	while (line[i] != '"' && line[i] != '\0')
+	while (line[i] != separator1 && line[i] != '\0')
 	{
 		i++;
 	}
 	i++;
 
-	while (line[i] != '"' && line[i] != '\0')
+	while (line[i] != separator2 && line[i] != '\0')
 	{
 		buf[j] = line[i];
 		i++;
 		j++;
 		buf[j] = '\0';
 	}
-
 }
 
 //-----------------------------------------------------------------------------
-// Fills the approriate buffer with the IP address
+// Get the number of the station
 //-----------------------------------------------------------------------------
-void fillBuffer(char *line, int station)
+int getStationNumber(char *line)
 {
-	switch(station)
+	char temp[5];
+	int i = 0, j = 7;
+
+	while (line[j] != '.')
 	{
-		case 0:
-			getIPAddress(line, simulink);
-			break;
+		temp[i] = line[j];
+		i++;
+		j++;
+		temp[i] = '\0';
+	}
 
-		case 1:
-			getIPAddress(line, plcStation1);
-			break;
+	return(atoi(temp));
+}
 
-		case 2:
-			getIPAddress(line, plcStation2);
-			break;
+//-----------------------------------------------------------------------------
+// get the type of function or parameter for the station
+//-----------------------------------------------------------------------------
+void getFunction(char *line, char *parameter)
+{
+	int i = 0, j = 0;
 
-		case 3:
-			getIPAddress(line, plcStation3);
-			break;
+	while (line[j] != '.')
+	{
+		j++;
+	}
+	j++;
 
-		case 4:
-			getIPAddress(line, plcStation4);
-			break;
-
-		case 5:
-			getIPAddress(line, plcStation5);
-			break;
+	while (line[j] != ' ' && line[j] != '=' && line[j] != '(')
+	{
+		parameter[i] = line[j];
+		i++;
+		j++;
+		parameter[i] = '\0';
 	}
 }
 
 //-----------------------------------------------------------------------------
+// Add the UDP Port number to the plc station info
+//-----------------------------------------------------------------------------
+void addPlcPort(char *line, struct stationInfo *station_info)
+{
+	char type[100];
+	uint16_t *dataPointer;
+	getData(line, type, '(', ')');
+
+	if(!strncmp(type, "digital_in", 10))
+	{
+		dataPointer = station_info->digitalInPorts;
+	}
+
+	else if(!strncmp(type, "digital_out", 11))
+	{
+		dataPointer = station_info->digitalOutPorts;
+	}
+
+	else if(!strncmp(type, "analog_in", 9))
+	{
+		dataPointer = station_info->analogInPorts;
+	}
+
+	else if(!strncmp(type, "analog_out", 10))
+	{
+		dataPointer = station_info->analogOutPorts;
+	}
+
+	int i = 0;
+	while (dataPointer[i] != 0)
+	{
+		i++;
+	}
+
+	char temp_buffer[100];
+	getData(line, temp_buffer, '"', '"');
+	dataPointer[i] = atoi(temp_buffer);
+}
+
+//-----------------------------------------------------------------------------
 // Parse the interface.cfg file looking for the IP address of the Simulink app
-// and for each OpenPLC station
+// and for each OpenPLC station information
 //-----------------------------------------------------------------------------
 void parseConfigFile()
 {
 	string line;
-	char buffer[1024];
+	char line_str[1024];
 	ifstream cfgfile("interface.cfg");
 
 	if (cfgfile.is_open())
 	{
 		while (getline(cfgfile, line))
 		{
-			strncpy(buffer, line.c_str(), 1024);
-			if (buffer[0] != '#' && strlen(buffer) > 1)
+			strncpy(line_str, line.c_str(), 1024);
+			if (line_str[0] != '#' && strlen(line_str) > 1)
 			{
-				if (!strncmp(buffer, "Simulink", 8))
+				if (!strncmp(line_str, "num_stations", 12))
 				{
-					fillBuffer(buffer, 0);
+					char temp_buffer[5];
+					getData(line_str, temp_buffer, '"', '"');
+					num_stations = atoi(temp_buffer);
+					stations_data = (struct plcData *)malloc(num_stations*sizeof(struct plcData));
+					stations_info = (struct stationInfo *)malloc(num_stations*sizeof(struct stationInfo));
 				}
 
-				else if (!strncmp(buffer, "Station", 7))
+				else if (!strncmp(line_str, "simulink", 8))
 				{
-					char temp[2];
-					temp[0] = buffer[7];
-					temp[1] = '\0';
-					fillBuffer(buffer, atoi(temp));
+					getData(line_str, simulink_ip, '"', '"');
 				}
 
+				else if (!strncmp(line_str, "station", 7))
+				{
+					int stationNumber = getStationNumber(line_str);
+					char functionType[100];
+					getFunction(line_str, functionType);
+
+					if (!strncmp(functionType, "ip", 2))
+					{
+						getData(line_str, stations_info[stationNumber].ip, '"', '"');
+					}
+					else if (!strncmp(functionType, "add", 3))
+					{
+						addPlcPort(line_str, &stations_info[stationNumber]);
+					}
+				}
 			}
 		}
-
 		cfgfile.close();
 	}
 
 	else
 	{
 		cout << "Error trying to open file!" << endl;
+	}
+}
+
+void displayInfo()
+{
+	for (int i = 0; i < num_stations; i++)
+	{
+		printf("\nStation %d:\n", i);
+		printf("ip: %s\n", stations_info[i].ip);
+
+		int j = 0;
+		while (stations_info[i].analogInPorts[j] != 0)// && j <= 4)
+		{
+			printf("AnalogIn %d: %d\n", j, stations_info[i].analogInPorts[j]);
+			j++;
+		}
+
+		j = 0;
+		while (stations_info[i].analogOutPorts[j] != 0)// && j <= 4)
+		{
+			printf("AnalogOut %d: %d\n", j, stations_info[i].analogOutPorts[j]);
+			j++;
+		}
+
+		j = 0;
+		while (stations_info[i].digitalInPorts[j] != 0)// && j <= 4)
+		{
+			printf("DigitalIn %d: %d\n", j, stations_info[i].digitalInPorts[j]);
+			j++;
+		}
+
+		j = 0;
+		while (stations_info[i].digitalOutPorts[j] != 0)// && j <= 4)
+		{
+			printf("DigitalOut %d: %d\n", j, stations_info[i].digitalOutPorts[j]);
+			j++;
+		}
+	}
+}
+
+
+//-----------------------------------------------------------------------------
+// Thread to send data to Simulink using UDP
+//-----------------------------------------------------------------------------
+void *sendSimulinkData(void *args)
+{
+	//getting arguments
+	int *rcv_args = (int *)args;
+	int stationNumber = rcv_args[0];
+	int varType = rcv_args[1];
+	int varIndex = rcv_args[2];
+
+	int socket_fd, port;
+	struct sockaddr_in server_addr;
+	struct hostent *server;
+	int send_len;
+	uint16_t *analogPointer;
+	bool *digitalPointer;
+
+	//Create TCP Socket
+	socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (socket_fd<0)
+	{
+		perror("Server: error creating stream socket");
+		exit(1);
+	}
+
+	//Figure out information about variable
+	switch (varType)
+	{
+		case TYPE_ANALOGOUT:
+			port = stations_info[stationNumber].analogOutPorts[varIndex];
+			analogPointer = &stations_data[stationNumber].analogOut[varIndex];
+			break;
+		case TYPE_DIGITALOUT:
+			port = stations_info[stationNumber].digitalOutPorts[varIndex];
+			digitalPointer = &stations_data[stationNumber].digitalOut[varIndex];
+			break;
+	}
+
+	//Initialize Server Structures
+	server = gethostbyname(simulink_ip);
+	if (server == NULL)
+	{
+		printf("Error locating host %s\n", simulink_ip);
+		return 0;
+	}
+
+	bzero((char *) &server_addr, sizeof(server_addr));
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(port);
+	bcopy((char *)server->h_addr, (char *)&server_addr.sin_addr.s_addr, server->h_length);
+
+	while (1)
+	{
+		char value_str[10];
+		pthread_mutex_lock(&bufferLock);
+		(varType == TYPE_DIGITALOUT) ? sprintf(value_str, "%d", *digitalPointer) : sprintf(value_str, "%d", *analogPointer);
+		pthread_mutex_unlock(&bufferLock);
+
+		/*
+		//DEBUG
+		char varType_str[50];
+		(varType == TYPE_ANALOGOUT) ? strncpy(varType_str, "TYPE_ANALOGOUT", 50) : strncpy(varType_str, "TYPE_DIGITALOUT", 50);
+		printf("Sending data type %s, station %d, index %d, value: %s\n", varType_str, stationNumber, varIndex, value_str);
+		*/
+
+		send_len = sendto(socket_fd, value_str, strlen(value_str), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
+		if (send_len < 0)
+		{
+			printf("Error sending data to simulink on socket %d\n", socket_fd);
+		}
+
+		sleep_ms(100);
 	}
 }
 
@@ -191,153 +381,39 @@ int createUDPServer(int port)
 }
 
 //-----------------------------------------------------------------------------
-// Fill the provided char buffers with the status of the pump and the relief
-// valve
-//-----------------------------------------------------------------------------
-void getValuesFromStation(int stationNumber, char *pumpStatusBuf, char *valveStatusBuf)
-{
-	int pumpStatus, valveStatus;
-
-	switch (stationNumber)
-	{
-		case 1:
-			pthread_mutex_lock(&bufferLock);
-			pumpStatus = dataStation1.pumpState;
-			valveStatus = dataStation1.reliefValve;
-			pthread_mutex_unlock(&bufferLock);
-			break;
-		case 2:
-			pthread_mutex_lock(&bufferLock);
-			pumpStatus = dataStation2.pumpState;
-			valveStatus = dataStation2.reliefValve;
-			pthread_mutex_unlock(&bufferLock);
-			break;
-		case 3:
-			pthread_mutex_lock(&bufferLock);
-			pumpStatus = dataStation3.pumpState;
-			valveStatus = dataStation3.reliefValve;
-			pthread_mutex_unlock(&bufferLock);
-			break;
-		case 4:
-			pthread_mutex_lock(&bufferLock);
-			pumpStatus = dataStation4.pumpState;
-			valveStatus = dataStation4.reliefValve;
-			pthread_mutex_unlock(&bufferLock);
-			break;
-		case 5:
-			pthread_mutex_lock(&bufferLock);
-			pumpStatus = dataStation5.pumpState;
-			valveStatus = dataStation5.reliefValve;
-			pthread_mutex_unlock(&bufferLock);
-			break;
-	}
-
-	sprintf(pumpStatusBuf, "%d", pumpStatus);
-	sprintf(valveStatusBuf, "%d", valveStatus);
-}
-
-//-----------------------------------------------------------------------------
-// Thread to send data to Simulink using UDP
-//-----------------------------------------------------------------------------
-void *sendSimulinkData(void *args)
-{
-	int stationNumber = *(int *)args;
-	int socket_fd, port1, port2;
-	struct sockaddr_in server_addr1;
-	struct sockaddr_in server_addr2;
-	struct hostent *server;
-	int send_len;
-	char pumpStatus[20];
-	char valveStatus[20];
-
-	//Create TCP Socket
-	socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (socket_fd<0)
-	{
-		perror("Server: error creating stream socket");
-		exit(1);
-	}
-
-	//Figure out information about station
-	switch (stationNumber)
-	{
-		case 1:
-			port1 = 10001;
-			port2 = 10003;
-			break;
-		case 2:
-			port1 = 20001;
-			port2 = 20003;
-			break;
-		case 3:
-			port1 = 30001;
-			port2 = 30003;
-			break;
-		case 4:
-			port1 = 40001;
-			port2 = 40003;
-			break;
-		case 5:
-			port1 = 50001;
-			port2 = 50003;
-			break;
-	}
-
-	//Initialize Server Structures
-	server = gethostbyname(simulink);
-	if (server == NULL)
-	{
-		printf("Error locating host %s\n", simulink);
-		return 0;
-	}
-
-	bzero((char *) &server_addr1, sizeof(server_addr1));
-	server_addr1.sin_family = AF_INET;
-	server_addr1.sin_port = htons(port1);
-	bcopy((char *)server->h_addr, (char *)&server_addr1.sin_addr.s_addr, server->h_length);
-
-	bzero((char *) &server_addr2, sizeof(server_addr2));
-	server_addr2.sin_family = AF_INET;
-	server_addr2.sin_port = htons(port2);
-	bcopy((char *)server->h_addr, (char *)&server_addr2.sin_addr.s_addr, server->h_length);
-
-	while (1)
-	{
-		getValuesFromStation(stationNumber, pumpStatus, valveStatus);
-
-		//printf("sending pumpStatus: %s to port: %d\n", pumpStatus, port1);
-		send_len = sendto(socket_fd, pumpStatus, strlen(pumpStatus), 0, (struct sockaddr *)&server_addr1, sizeof(server_addr1));
-		if (send_len < 0)
-		{
-			printf("Error sending pump status on socket %d\n", socket_fd);
-		}
-
-		//printf("sending valveStatus: %s to port: %d\n", valveStatus, port2);
-		send_len = sendto(socket_fd, valveStatus, strlen(valveStatus), 0, (struct sockaddr *)&server_addr2, sizeof(server_addr2));
-		if (send_len < 0)
-		{
-			printf("Error sending valve status on socket %d\n", socket_fd);
-		}
-		sleep_ms(100);
-	}
-}
-
-
-//-----------------------------------------------------------------------------
 // Thread to receive data from Simulink using UDP
 //-----------------------------------------------------------------------------
 void *receiveSimulinkData(void *arg)
 {
 	int *rcv_args = (int *)arg;
-	int socket_fd = rcv_args[0];
-	int stationNumber = rcv_args[1];
+	int stationNumber = rcv_args[0];
+	int varType = rcv_args[1];
+	int varIndex = rcv_args[2];
+
+	int socket_fd, port;
 	const int BUFF_SIZE = 1024;
 	int rcv_len;
 	unsigned char rcv_buffer[BUFF_SIZE];
 	socklen_t cli_len;
 	struct sockaddr_in client;
+	uint16_t *analogPointer;
+	bool *digitalPointer;
 
 	cli_len = sizeof(client);
+
+	switch (varType)
+	{
+		case TYPE_ANALOGIN:
+			port = stations_info[stationNumber].analogInPorts[varIndex];
+			analogPointer = &stations_data[stationNumber].analogIn[varIndex];
+			break;
+		case TYPE_DIGITALIN:
+			port = stations_info[stationNumber].digitalInPorts[varIndex];
+			digitalPointer = &stations_data[stationNumber].digitalIn[varIndex];
+			break;
+	}
+
+	socket_fd = createUDPServer(port);
 
 	while(1)
 	{
@@ -350,36 +426,18 @@ void *receiveSimulinkData(void *arg)
 		else
 		{
 			double valueRcv = convertBufferToDouble(rcv_buffer);
-			//printf("Received packet from %s:%d\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
-			//printf("Size: %d\nData: %f\n" , rcv_len, valueRcv);
-			switch(stationNumber)
-			{
-				case 1:
-					pthread_mutex_lock(&bufferLock);
-					dataStation1.pressure = (uint16_t)valueRcv;
-					pthread_mutex_unlock(&bufferLock);
-					break;
-				case 2:
-					pthread_mutex_lock(&bufferLock);
-					dataStation2.pressure = (uint16_t)valueRcv;
-					pthread_mutex_unlock(&bufferLock);
-					break;
-				case 3:
-					pthread_mutex_lock(&bufferLock);
-					dataStation3.pressure = (uint16_t)valueRcv;
-					pthread_mutex_unlock(&bufferLock);
-					break;
-				case 4:
-					pthread_mutex_lock(&bufferLock);
-					dataStation4.pressure = (uint16_t)valueRcv;
-					pthread_mutex_unlock(&bufferLock);
-					break;
-				case 5:
-					pthread_mutex_lock(&bufferLock);
-					dataStation5.pressure = (uint16_t)valueRcv;
-					pthread_mutex_unlock(&bufferLock);
-					break;
-			}
+
+			/*
+			//DEBUG
+			printf("Received packet from %s:%d\n", inet_ntoa(client.sin_addr), ntohs(client.sin_port));
+			char varType_str[50];
+			(varType == TYPE_ANALOGOUT) ? strncpy(varType_str, "TYPE_ANALOGOUT", 50) : strncpy(varType_str, "TYPE_DIGITALOUT", 50);
+			printf("Station: %d, Type: %s, Index: %d, Size: %d, Data: %f\n" , stationNumber, varType_str, varIndex, rcv_len, valueRcv);
+			*/
+
+			pthread_mutex_lock(&bufferLock);
+			(varType == TYPE_DIGITALIN) ? (*digitalPointer = (bool)valueRcv) : (*analogPointer = (uint16_t)valueRcv);
+			pthread_mutex_unlock(&bufferLock);
 		}
 	}
 }
@@ -389,51 +447,74 @@ void *receiveSimulinkData(void *arg)
 //-----------------------------------------------------------------------------
 void exchangeDataWithSimulink()
 {
-	//creating servers to read pressure on all stations
-	int *args0 = new int[2]; int *args1 = new int[2]; int *args2 = new int[2]; int *args3 = new int[2]; int *args4 = new int[2];
+	for (int i = 0; i < num_stations; i++)
+	{
+		//sending analog data
+		int j = 0;
+		while (stations_info[i].analogOutPorts[j] != 0)
+		{
+			int *args = new int[3];
+			args[0] = i; //station number
+			args[1] = TYPE_ANALOGOUT; //var type
+			args[2] = j; //var index
 
-	args0[0] = createUDPServer(10002);
-	args0[1] = 1; //OpenPLC Station number
-	args1[0] = createUDPServer(20002);
-	args1[1] = 2; //OpenPLC Station number
-	args2[0] = createUDPServer(30002);
-	args2[1] = 3; //OpenPLC Station number
-	args3[0] = createUDPServer(40002);
-	args3[1] = 4; //OpenPLC Station number
-	args4[0] = createUDPServer(50002);
-	args4[1] = 5; //OpenPLC Station number
+			pthread_t sendingThread;
+			pthread_create(&sendingThread, NULL, sendSimulinkData, args);
+			j++;
+		}
 
-	//creating threads to receive simulink data
-	pthread_t receivingThreads[5];
-	pthread_create(&receivingThreads[0], NULL, receiveSimulinkData, args0);
-	pthread_create(&receivingThreads[1], NULL, receiveSimulinkData, args1);
-	pthread_create(&receivingThreads[2], NULL, receiveSimulinkData, args2);
-	pthread_create(&receivingThreads[3], NULL, receiveSimulinkData, args3);
-	pthread_create(&receivingThreads[4], NULL, receiveSimulinkData, args4);
+		//receiving analog data
+		j = 0;
+		while (stations_info[i].analogInPorts[j] != 0)
+		{
+			int *args = new int[3];
+			args[0] = i; //station number
+			args[1] = TYPE_ANALOGIN; //var type
+			args[2] = j; //var index
 
-	//creating threads to send data to simulink
-	int *stations = new int[5];
-	stations[0] = 1; stations[1] = 2; stations[2] = 3; stations[3] = 4; stations[4] = 5;
-	pthread_t sendingThreads[5];
-	pthread_create(&sendingThreads[0], NULL, sendSimulinkData, (int *)&stations[0]);
-	pthread_create(&sendingThreads[1], NULL, sendSimulinkData, (int *)&stations[1]);
-	pthread_create(&sendingThreads[2], NULL, sendSimulinkData, (int *)&stations[2]);
-	pthread_create(&sendingThreads[3], NULL, sendSimulinkData, (int *)&stations[3]);
-	pthread_create(&sendingThreads[4], NULL, sendSimulinkData, (int *)&stations[4]);
+			pthread_t receivingThread;
+			pthread_create(&receivingThread, NULL, receiveSimulinkData, args);
+			j++;
+		}
+
+		//sending digital data
+		j = 0;
+		while (stations_info[i].digitalOutPorts[j] != 0)
+		{
+			int *args = new int[3];
+			args[0] = i; //station number
+			args[1] = TYPE_DIGITALOUT; //var type
+			args[2] = j; //var index
+
+			pthread_t sendingThread;
+			pthread_create(&sendingThread, NULL, sendSimulinkData, args);
+			j++;
+		}
+
+		//receiving digital data
+		j = 0;
+		while (stations_info[i].digitalInPorts[j] != 0)
+		{
+			int *args = new int[3];
+			args[0] = i; //station number
+			args[1] = TYPE_DIGITALIN; //var type
+			args[2] = j; //var index
+
+			pthread_t receivingThread;
+			pthread_create(&receivingThread, NULL, receiveSimulinkData, args);
+			j++;
+		}
+	}
 }
 
-//-----------------------------------------------------------------------------
-// Thread to connect to an OpenPLC station and exchange data with it
-//-----------------------------------------------------------------------------
-void *connectToStation(void *args)
+void *exchangeDataWithPLC(void *args)
 {
 	int stationNumber = *(int *)args;
-	int socket_fd, port = 6668;
+	int socket_fd, port = PLC_STATIONS_PORT;
 	struct sockaddr_in server_addr;
 	struct hostent *server;
 	int data_len;
 	socklen_t cli_len;
-	struct plcData *plcStation;
 	struct plcData *localBuffer = (struct plcData *)malloc(sizeof(struct plcData));
 	char *hostaddr;
 
@@ -445,33 +526,8 @@ void *connectToStation(void *args)
 		exit(1);
 	}
 
-	//Figure out information about station
-	switch (stationNumber)
-	{
-		case 1:
-			hostaddr = plcStation1;
-			plcStation = &dataStation1;
-			break;
-		case 2:
-			hostaddr = plcStation2;
-			plcStation = &dataStation2;
-			break;
-		case 3:
-			hostaddr = plcStation3;
-			plcStation = &dataStation3;
-			break;
-		case 4:
-			hostaddr = plcStation4;
-			plcStation = &dataStation4;
-			break;
-		case 5:
-			hostaddr = plcStation5;
-			plcStation = &dataStation5;
-			break;
-	}
-
 	//Initialize Server Structures
-	server = gethostbyname(hostaddr);
+	server = gethostbyname(stations_info[stationNumber].ip);
 	if (server == NULL)
 	{
 		printf("Error locating host %s\n", hostaddr);
@@ -495,9 +551,7 @@ void *connectToStation(void *args)
 	while (1)
 	{
 		pthread_mutex_lock(&bufferLock);
-		localBuffer->pumpState = 0;
-		localBuffer->pressure = plcStation->pressure;
-		localBuffer->reliefValve = 0;
+		memcpy(localBuffer, &stations_data[stationNumber], sizeof(struct plcData));
 		pthread_mutex_unlock(&bufferLock);
 
 		//printf("Sending pressure: %d to station: %d\n", localBuffer->pressure, stationNumber);
@@ -517,8 +571,7 @@ void *connectToStation(void *args)
 			else
 			{
 				pthread_mutex_lock(&bufferLock);
-				plcStation->pumpState = localBuffer->pumpState;
-				plcStation->reliefValve = localBuffer->reliefValve;
+				memcpy(&stations_data[stationNumber], localBuffer, sizeof(struct plcData));
 				pthread_mutex_unlock(&bufferLock);
 			}
 		}
@@ -527,55 +580,43 @@ void *connectToStation(void *args)
 	}
 }
 
-//-----------------------------------------------------------------------------
-// Main function responsible to exchange data with the OpenPLC stations
-//-----------------------------------------------------------------------------
-void exchangeDataWithOpenPLC()
+void connectToPLCStations()
 {
-	//creating threads to exchange data with the OpenPLC stations
-	int *stations = new int[5];
-	stations[0] = 1; stations[1] = 2; stations[2] = 3; stations[3] = 4; stations[4] = 5;
-	pthread_t plcThreads[5];
-	pthread_create(&plcThreads[0], NULL, connectToStation, (int *)&stations[0]);
-	pthread_create(&plcThreads[1], NULL, connectToStation, (int *)&stations[1]);
-	pthread_create(&plcThreads[2], NULL, connectToStation, (int *)&stations[2]);
-	pthread_create(&plcThreads[3], NULL, connectToStation, (int *)&stations[3]);
-	pthread_create(&plcThreads[4], NULL, connectToStation, (int *)&stations[4]);
+	for (int i = 0; i < num_stations; i++)
+	{
+		int *station = new int[1]; //alloc space on heap
+		station[0] = i;
+
+		pthread_t plcThread;
+		pthread_create(&plcThread, NULL, exchangeDataWithPLC, &station[0]);
+
+	}
 }
 
 //-----------------------------------------------------------------------------
-// Interface main function. Should call the functions to exchange data with
-// the simulink application and with the OpenPLC stations. The main loop
-// must also display periodically the data exchanged with each OpenPLC station.
+// Interface main function. Should parse the configuration file, call the
+// functions to exchange data with the simulink application and with the
+// OpenPLC stations. The main loop must also display periodically the data
+// exchanged with each OpenPLC station.
 //-----------------------------------------------------------------------------
-int main ()
+int main()
 {
-	printf("Starting Interface program...\n");
 	parseConfigFile();
-	printf("Simulink IP: %s\n", simulink);
-	printf("Station 1 IP: %s\n", plcStation1);
-	printf("Station 2 IP: %s\n", plcStation2);
-	printf("Station 3 IP: %s\n", plcStation3);
-	printf("Station 4 IP: %s\n", plcStation4);
-	printf("Station 5 IP: %s\n", plcStation5);
+	displayInfo();
 
 	exchangeDataWithSimulink();
-	exchangeDataWithOpenPLC();
+	connectToPLCStations();
 
 	while(1)
 	{
-		///*
 		pthread_mutex_lock(&bufferLock);
-		printf("Station 1\nPressure: %d\tPump: %d\t\tValve: %d\n", dataStation1.pressure, dataStation1.pumpState, dataStation1.reliefValve);
-		printf("Station 2\nPressure: %d\tPump: %d\t\tValve: %d\n", dataStation2.pressure, dataStation2.pumpState, dataStation2.reliefValve);
-		printf("Station 3\nPressure: %d\tPump: %d\t\tValve: %d\n", dataStation3.pressure, dataStation3.pumpState, dataStation3.reliefValve);
-		printf("Station 4\nPressure: %d\tPump: %d\t\tValve: %d\n", dataStation4.pressure, dataStation4.pumpState, dataStation4.reliefValve);
-		printf("Station 5\nPressure: %d\tPump: %d\t\tValve: %d\n\n", dataStation5.pressure, dataStation5.pumpState, dataStation5.reliefValve);
+		printf("Station 1\nPressure: %d\tTank: %d\t\tPump: %d\t\tValve: %d\n", stations_data[0].analogIn[0], stations_data[0].analogIn[1], stations_data[0].digitalOut[0], stations_data[0].digitalOut[1]);
+		printf("Station 2\nPressure: %d\t\t\tPump: %d\t\tValve: %d\n", stations_data[1].analogIn[0], stations_data[1].digitalOut[0], stations_data[1].digitalOut[1]);
+		printf("Station 3\nPressure: %d\t\t\tPump: %d\t\tValve: %d\n", stations_data[2].analogIn[0], stations_data[2].digitalOut[0], stations_data[2].digitalOut[1]);
+		printf("Station 4\nPressure: %d\t\t\tPump: %d\t\tValve: %d\n", stations_data[3].analogIn[0], stations_data[3].digitalOut[0], stations_data[3].digitalOut[1]);
+		printf("Station 5\nPressure: %d\tTank: %d\t\tPump: %d\t\tValve: %d\n\n", stations_data[4].analogIn[0], stations_data[4].analogIn[1], stations_data[4].digitalOut[0], stations_data[4].digitalOut[1]);
 		pthread_mutex_unlock(&bufferLock);
 
-		sleep_ms(1000);
-		//*/
+		sleep_ms(3000);
 	}
-
-	return 0;
 }
