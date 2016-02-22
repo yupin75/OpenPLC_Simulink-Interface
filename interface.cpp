@@ -18,6 +18,9 @@
 #define TYPE_DIGITALIN		2
 #define TYPE_DIGITALOUT		3
 
+#define ANALOG_BUF_SIZE		8
+#define DIGITAL_BUF_SIZE	16
+
 #define PLC_STATIONS_PORT	6668
 
 using namespace std;
@@ -28,19 +31,19 @@ pthread_mutex_t bufferLock;
 
 struct plcData
 {
-	uint16_t analogIn[8];
-	uint16_t analogOut[8];
-	bool digitalIn[16];
-	bool digitalOut[16];
+	uint16_t analogIn[ANALOG_BUF_SIZE];
+	uint16_t analogOut[ANALOG_BUF_SIZE];
+	bool digitalIn[DIGITAL_BUF_SIZE];
+	bool digitalOut[DIGITAL_BUF_SIZE];
 };
 
 struct stationInfo
 {
 	char ip[100];
-	uint16_t analogInPorts[8];
-	uint16_t analogOutPorts[8];
-	uint16_t digitalInPorts[16];
-	uint16_t digitalOutPorts[16];
+	uint16_t analogInPorts[ANALOG_BUF_SIZE];
+	uint16_t analogOutPorts[ANALOG_BUF_SIZE];
+	uint16_t digitalInPorts[DIGITAL_BUF_SIZE];
+	uint16_t digitalOutPorts[DIGITAL_BUF_SIZE];
 };
 
 struct plcData *stations_data;
